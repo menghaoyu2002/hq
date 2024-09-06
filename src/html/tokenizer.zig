@@ -1,6 +1,6 @@
 const std = @import("std");
-const Token = std.zig.Token;
-const Tag = Token.Tag;
+
+const expect = std.testing.expect;
 const ArrayList = std.ArrayList;
 const mem = std.mem;
 const Allocator = mem.Allocator;
@@ -16,59 +16,67 @@ const HTMLToken = union(enum) {
     attribute: Attribute,
 };
 
+const ReadResult = struct { []const u8, usize };
+
+fn readTagName(str: []const u8) ReadResult {
+    var i: usize = 0;
+    while (i < str.len and str[i] != ' ' and str[i] != '>') : (i += 1) {}
+    return .{ str[0..i], i };
+}
+
+fn readToEndOfTag(str: []const u8) ReadResult {
+    var i: usize = 0;
+    while (i < str.len and str[i] != '>') : (i += 1) {}
+    return .{ str[0..i], i };
+}
+
+// fn readAttributes(str: []const u8) ReadResult {}
+
 pub fn tokenize(allocator: Allocator, rawHtml: [:0]const u8) !ArrayList(HTMLToken) {
-    var tokenizer = std.zig.Tokenizer.init(rawHtml);
     var htmlTokens = ArrayList(HTMLToken).init(allocator);
 
-    var token = tokenizer.next();
-    while (token.tag != Tag.eof) {
-        switch (token.tag) {
-            .identifier => {
-                const start = token.loc.start;
-                var end = token.loc.end;
-
-                var next = tokenizer.next();
-                while (next.tag == Tag.identifier) : (next = tokenizer.next()) {
-                    end = next.loc.end;
-                }
-
-                const content = rawHtml[start..end];
-                switch (next.tag) {
-                    .equal => {
-                        const valueToken = tokenizer.next();
-                        const value = rawHtml[valueToken.loc.start..valueToken.loc.end];
-                        try htmlTokens.append(HTMLToken{ .attribute = .{ .key = content, .value = value } });
-                    },
-                    .angle_bracket_left => {
-                        try htmlTokens.append(HTMLToken{ .text = content });
-                        token = next; // cool line here. to avoid duplicating the code, just set the loop variable to the value and try again
-                        continue;
-                    },
-                    else => {
-                        try htmlTokens.append(HTMLToken{ .text = content });
-                    },
-                }
-            },
-            .angle_bracket_left => {
-                var next = tokenizer.next();
-                switch (next.tag) {
-                    .slash => {
-                        next = tokenizer.next();
-                        const tag = rawHtml[next.loc.start..next.loc.end];
-                        try htmlTokens.append(HTMLToken{ .endTag = tag });
-                    },
-                    .bang => {
-                        // handle comments
-                    },
-                    else => {
-                        const tag = rawHtml[next.loc.start..next.loc.end];
-                        try htmlTokens.append(HTMLToken{ .startTag = tag });
-                    },
+    var i: usize = 0;
+    while (i < rawHtml.len) : (i += 1) {
+        const char = rawHtml[i];
+        switch (char) {
+            '<' => {
+                // safe to assume +2 is sufficient. There cannot be an html tag with less than 3 characters
+                if (i + 2 < rawHtml.len) {
+                    switch (rawHtml[i + 1]) {
+                        '/' => {
+                            const tuple = readTagName(rawHtml[i + 2 ..]);
+                            try htmlTokens.append(HTMLToken{ .endTag = tuple[0] });
+                            i += tuple[1] + 2;
+                        },
+                        '!' => {
+                            const tuple = readToEndOfTag(rawHtml[i + 2 ..]);
+                            if (rawHtml[i + 2] == '-' and i + 3 < rawHtml.len and rawHtml[i + 3] == '-') {
+                                const comment = tuple[0][3 .. tuple[0].len - 3];
+                                try htmlTokens.append(HTMLToken{ .comment = comment });
+                            } else {
+                                try htmlTokens.append(HTMLToken{ .docType = tuple[0] });
+                            }
+                            i += tuple[1] + 2;
+                        },
+                        else => {
+                            const tuple = readTagName(rawHtml[i + 1 ..]);
+                            try htmlTokens.append(HTMLToken{ .startTag = tuple[0] });
+                            i += tuple[1] + 1;
+                        },
+                    }
                 }
             },
-            else => {}, // ignore other characters
+            else => {
+                const start = i;
+                var isAlphanumeric = false;
+                while (i + 1 < rawHtml.len and rawHtml[i + 1] != '<') : (i += 1) {
+                    isAlphanumeric = isAlphanumeric or std.ascii.isAlphanumeric(rawHtml[i]);
+                }
+                if (isAlphanumeric) {
+                    try htmlTokens.append(HTMLToken{ .text = rawHtml[start .. i + 1] });
+                }
+            },
         }
-        token = tokenizer.next();
     }
 
     return htmlTokens;
