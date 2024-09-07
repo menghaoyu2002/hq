@@ -30,7 +30,17 @@ fn readToEndOfTag(str: []const u8) ReadResult {
     return .{ str[0..i], i };
 }
 
-// fn readAttributes(str: []const u8) ReadResult {}
+fn appendAttributes(str: []const u8, existingTokens: *ArrayList(HTMLToken)) !void {
+    var split = mem.splitAny(u8, str, " ");
+    var curr = split.peek();
+    while (curr != null) : (curr = split.next()) {
+        if (curr.?.len == 0) continue;
+        var attribute = mem.splitAny(u8, curr.?, "=");
+        const key = attribute.first();
+        const value = attribute.rest();
+        try existingTokens.append(HTMLToken{ .attribute = Attribute{ .key = key, .value = value } });
+    }
+}
 
 pub fn tokenize(allocator: Allocator, rawHtml: [:0]const u8) !ArrayList(HTMLToken) {
     var htmlTokens = ArrayList(HTMLToken).init(allocator);
@@ -62,6 +72,9 @@ pub fn tokenize(allocator: Allocator, rawHtml: [:0]const u8) !ArrayList(HTMLToke
                             const tuple = readTagName(rawHtml[i + 1 ..]);
                             try htmlTokens.append(HTMLToken{ .startTag = tuple[0] });
                             i += tuple[1] + 1;
+                            const rest = readToEndOfTag(rawHtml[i..]);
+                            try appendAttributes(rest[0], &htmlTokens);
+                            i += rest[1] + 1;
                         },
                     }
                 }
